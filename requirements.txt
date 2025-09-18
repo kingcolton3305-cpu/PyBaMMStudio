@@ -1,3 +1,7 @@
 numpy<2.0
 matplotlib<3.9
 pybamm
+jax
+jaxlib
+matplotlib
+streamlit
