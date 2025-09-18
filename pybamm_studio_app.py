@@ -1,6 +1,8 @@
 import streamlit as st
 import pybamm
 import matplotlib.pyplot as plt
+import tempfile
+import os
 
 st.set_page_config(page_title="PyBaMM Studio", layout="wide")
 
@@ -43,6 +45,12 @@ experiment = pybamm.Experiment([
      "Rest for 30 minutes")
 ] * 1)  # one cycle
 
+# Utility function: Export Repro-Pack
+def export_repro_pack(sim, filename="repro_pack.json"):
+    """Export simulation configuration and results as a JSON Repro-Pack."""
+    sim.export_json(filename)
+    return filename
+
 # Step 4: Run simulation
 if st.sidebar.button("Run Simulation"):
     with st.spinner("Running simulation... This may take a moment."):
@@ -58,5 +66,29 @@ if st.sidebar.button("Run Simulation"):
         st.success("Simulation complete!")
         st.write(f"Final time: {sol['Time [s]'].entries[-1]/3600:.2f} h")
         st.write(f"Final voltage: {sol['Voltage [V]'].entries[-1]:.2f} V")
+
+        # Export Repro-Pack and Plot
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Export JSON
+            repro_file = os.path.join(tmpdir, "repro_pack.json")
+            export_repro_pack(sim, repro_file)
+            with open(repro_file, "rb") as f:
+                st.download_button(
+                    label="Download Repro-Pack",
+                    data=f,
+                    file_name="repro_pack.json",
+                    mime="application/json"
+                )
+
+            # Export PNG plot
+            plot_file = os.path.join(tmpdir, "voltage_vs_time.png")
+            fig.savefig(plot_file, dpi=300)
+            with open(plot_file, "rb") as f:
+                st.download_button(
+                    label="Download Voltage vs Time Plot",
+                    data=f,
+                    file_name="voltage_vs_time.png",
+                    mime="image/png"
+                )
 else:
     st.info("Configure your model in the sidebar and click 'Run Simulation' to begin.")
