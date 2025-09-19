@@ -25,6 +25,8 @@ pip install -r requirements.txt
 # 3. Launch Streamlit
 streamlit run app.py
 ```
+### Run on Streamlit Cloud
+https://pybammstudio-dzkyrwzsvsf27fxwqnmfq5.streamlit.app/
 
 ## 📦 Features
 1. Edit Python code directly in the browser (starter Single Particle Model included).
