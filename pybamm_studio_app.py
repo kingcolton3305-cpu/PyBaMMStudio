@@ -235,7 +235,7 @@ with tabs[1]:
         df_view = df_view.loc[mask].reset_index(drop=True)
 
     st.caption("Double-click cells to edit. Values accept JSON (numbers, strings, booleans).")
-    edited_df = st.experimental_data_editor(df_view, use_container_width=True, num_rows="dynamic", key="param_editor")
+    edited_df = st.data_editor(df_view, use_container_width=True, num_rows="dynamic", key="param_editor")
     # Write edits back to full table if no search, otherwise just update the visible rows
     if search.strip():
         # Merge edited rows back into the full table
