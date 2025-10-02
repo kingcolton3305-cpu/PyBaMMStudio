@@ -367,7 +367,7 @@ import json as _cop_json
 import datetime as _cop_dt
 import re as _cop_re
 
-import streamlit as st as _cop_st
+import streamlit as _cop_st
 
 try:
     import pybamm as _cop_pb
