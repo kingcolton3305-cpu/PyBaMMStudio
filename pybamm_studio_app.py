@@ -361,7 +361,8 @@ from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
 
 import streamlit as st
-from groq import Groq
+from mistralai import Mistral
+import os, streamlit as st
 import pybamm as pb
 
 # local, free "RAG" subset
@@ -387,18 +388,24 @@ _SYS = """You are Mixtral inside PyBaMM Studio. When asked to build, return ONLY
 {"kind":"Rest","rest_min":30},
 {"kind":"CC","rate":"-1C","until_voltage_V":3.0}]}}"""
 
-def _groq_client():
-    key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+def _mistral_client():
+    key = st.secrets.get("MISTRAL_API_KEY") or os.getenv("MISTRAL_API_KEY")
     if not key:
-        st.warning("Set GROQ_API_KEY in .streamlit/secrets.toml to use Copilot Chat.")
+        st.warning("Set MISTRAL_API_KEY in Streamlit Secrets.")
         return None
-    return Groq(api_key=key)
+    return Mistral(api_key=key)
 
-def _mixtral(messages)->str:
-    cli = _groq_client()
-    if not cli: return ""
-    r = cli.chat.completions.create(model="mixtral-8x7b-32768", temperature=0.2, messages=messages)
-    return r.choices[0].message.content.strip()
+def _mixtral(messages: list[dict]) -> str:
+    cli = _mistral_client()
+    if not cli:
+        return ""
+    # Models: "open-mixtral-8x7b" or "mixtral-8x7b-instruct"
+    resp = cli.chat.complete(
+        model="open-mixtral-8x7b",
+        messages=messages,
+        temperature=0.2,
+    )
+    return resp.choices[0].message.content.strip()
 
 def _params_for(cell:_Cell)->Dict[str,Any]:
     hits=[p for p in _PARAM_DB if p["chem"]==cell.chemistry and p["pos"]==cell.positive_active and p["neg"]==cell.negative_active]
