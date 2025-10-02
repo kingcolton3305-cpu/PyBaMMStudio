@@ -355,4 +355,146 @@ with tabs[3]:
         mime="application/zip"
     )
 
+# ==== Copilot Chat (Mixtral) • Panel ====
+import os, json, io, datetime as _dt
+from dataclasses import dataclass, asdict
+from typing import List, Optional, Dict, Any
+
+import streamlit as st
+from groq import Groq
+import pybamm as pb
+
+# local, free "RAG" subset
+_PARAM_DB = [
+    {"chem":"li-ion","pos":"LCO","neg":"Graphite","symbol":"Nominal cell capacity [A.h]","value":2.0,"units":"A.h","src":"Chen2020 subset"},
+    {"chem":"li-ion","pos":"LCO","neg":"Graphite","symbol":"R_p","value":5.0e-6,"units":"m","src":"Chen2020 subset"},
+    {"chem":"li-ion","pos":"LCO","neg":"Graphite","symbol":"R_n","value":6.0e-6,"units":"m","src":"Chen2020 subset"},
+    {"chem":"li-ion","pos":"LCO","neg":"Graphite","symbol":"T_ref","value":298.15,"units":"K","src":"Chen2020 subset"},
+]
+
+@dataclass
+class _Cell: chemistry:str="li-ion"; positive_active:str="LCO"; negative_active:str="Graphite"; temperature_C:float=25.0; notes:Optional[str]=None
+@dataclass
+class _Step: kind:str; rate:Optional[str]=None; until_voltage_V:Optional[float]=None; until_current_C:Optional[float]=None; rest_min:Optional[float]=None
+@dataclass
+class _Exp: steps:List[_Step]; repeats:int=1; temperature_C:float=25.0
+
+_SYS = """You are Mixtral inside PyBaMM Studio. When asked to build, return ONLY JSON:
+{"action":"build","cell":{"chemistry":"li-ion","positive_active":"LCO","negative_active":"Graphite","temperature_C":25},
+"experiment":{"temperature_C":25,"repeats":1,"steps":[
+{"kind":"CC","rate":"0.5C","until_voltage_V":4.2},
+{"kind":"CV","until_voltage_V":4.2,"until_current_C":0.05},
+{"kind":"Rest","rest_min":30},
+{"kind":"CC","rate":"-1C","until_voltage_V":3.0}]}}"""
+
+def _groq_client():
+    key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+    if not key:
+        st.warning("Set GROQ_API_KEY in .streamlit/secrets.toml to use Copilot Chat.")
+        return None
+    return Groq(api_key=key)
+
+def _mixtral(messages)->str:
+    cli = _groq_client()
+    if not cli: return ""
+    r = cli.chat.completions.create(model="mixtral-8x7b-32768", temperature=0.2, messages=messages)
+    return r.choices[0].message.content.strip()
+
+def _params_for(cell:_Cell)->Dict[str,Any]:
+    hits=[p for p in _PARAM_DB if p["chem"]==cell.chemistry and p["pos"]==cell.positive_active and p["neg"]==cell.negative_active]
+    return {"values":{p["symbol"]:p["value"] for p in hits},
+            "citations":[{"symbol":p["symbol"],"units":p["units"],"src":p["src"]} for p in hits]}
+
+def _to_experiment(ex:_Exp):
+    lines=[]
+    for s in ex.steps:
+        if s.kind=="CC":
+            lines.append(f"{'Discharge' if str(s.rate).startswith('-') else 'Charge'} at {s.rate} until {float(s.until_voltage_V)} V")
+        elif s.kind=="CV":
+            lines.append(f"Hold at {float(s.until_voltage_V)} V until {float(s.until_current_C)} C")
+        elif s.kind=="Rest":
+            lines.append(f"Rest for {int(s.rest_min)} minutes")
+    if ex.repeats>1: lines.append(f"Repeat for {ex.repeats} times")
+    return pb.Experiment(lines, temperature=ex.temperature_C+273.15), lines
+
+def _run(pack, exp):
+    model = pb.lithium_ion.SPM()
+    params = pb.ParameterValues("Chen2020")
+    for k,v in pack.get("values",{}).items():
+        try: params.update({k:v})
+        except Exception: pass
+    sim = pb.Simulation(model, parameter_values=params, experiment=exp)
+    sol = sim.solve()
+    return sim, sol
+
+def render_copilot_chat_panel():
+    st.header("Copilot Chat (Mixtral)")
+    if "cop_hist" not in st.session_state:
+        st.session_state.cop_hist=[{"role":"system","content":_SYS}]
+    colA,colB=st.columns([1,1])
+    with colA:
+        st.caption("Describe your cell and protocol. Click Build & Run.")
+        user = st.text_area("Prompt", "LCO/graphite at 25°C. CC 0.5C→4.2V, CV to 0.05C, Rest 30 min, Discharge −1C→3.0V, 3 cycles.", height=120)
+        chat_btn = st.button("Chat")
+        build_btn = st.button("Build & Run", type="primary")
+    with colB:
+        out_box = st.empty()
+
+    if chat_btn:
+        st.session_state.cop_hist.append({"role":"user","content":user})
+        reply = _mixtral(st.session_state.cop_hist) or "Model unavailable."
+        out_box.markdown(reply)
+        return
+
+    if build_btn:
+        query = st.session_state.cop_hist + [{"role":"user","content":user},{"role":"user","content":"Return JSON for build now."}]
+        raw = _mixtral(query)
+        try:
+            data = json.loads(raw)
+        except Exception:
+            out_box.error("Model did not return JSON. Use Chat to refine prompt.")
+            return
+        if data.get("action")!="build":
+            out_box.error("No build action in response.")
+            return
+        cell = _Cell(**data["cell"])
+        ex = _Exp(
+            temperature_C=data["experiment"].get("temperature_C", cell.temperature_C),
+            repeats=data["experiment"].get("repeats",1),
+            steps=[_Step(**s) for s in data["experiment"]["steps"]],
+        )
+        pack = _params_for(cell)
+        pb_exp, lines = _to_experiment(ex)
+
+        c1,c2 = st.columns([1,1])
+        with c1:
+            st.subheader("Specs")
+            st.json({"cell":asdict(cell),"experiment":asdict(ex)})
+            st.subheader("Local parameters")
+            st.json(pack["citations"])
+            st.subheader("Experiment lines")
+            st.code("\n".join(lines))
+        with c2:
+            try:
+                sim, sol = _run(pack, pb_exp)
+                fig = sim.plot(["Voltage [V]"], testing=True)
+                st.pyplot(fig)
+                repro = {
+                    "timestamp": _dt.datetime.utcnow().isoformat()+"Z",
+                    "pybamm_version": pb.__version__,
+                    "model":"SPM",
+                    "experiment_lines": lines,
+                    "cell_spec": asdict(cell),
+                    "parameters": pack["citations"],
+                }
+                buf = io.BytesIO(json.dumps(repro, indent=2).encode())
+                st.download_button("Download Repro-Pack (.json)", data=buf, file_name="repro_pack.json", mime="application/json")
+            except Exception as e:
+                st.error(f"Run failed: {e}")
+# ==== End Copilot Chat panel ====
+
+choice = st.sidebar.radio("View", ["Studio","Copilot Chat"], horizontal=True)
+if choice=="Copilot Chat":
+    render_copilot_chat_panel()
+
 st.caption("© PyBaMM Studio Vertical Slice – Streamlit")
