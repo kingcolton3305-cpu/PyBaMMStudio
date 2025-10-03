@@ -196,8 +196,10 @@ def render_repro_text(script: str, params: Dict[str, Any], sim, sol) -> str:
             pass
     return "\n".join(lines)
 
-    def log(msg: str) -> None:
-        ss["chat_history"].append({"role": "system", "content": msg})
+    def log_msg(message: str) -> None:
+        if "hist" not in st.session_state:
+            st.session_state.hist = []
+        st.session_state.hist.append(message)
 
     def get_var(sol: pb.Solution, candidates: Iterable[str]):
         """Return .entries for the first candidate available in the solution."""
@@ -366,7 +368,7 @@ with tabs[2]:
 
     if run_btn:
         try:
-            log("Solving...")
+            log_msg("Solving...")
             model, sol = run_experiment(ss["experiment_text"], ss["period"])
 
             # Time
@@ -423,7 +425,7 @@ with tabs[2]:
                 st.pyplot(plt.gcf())
                 plt.close()
 
-            log("Solve complete.")
+            log_msg("Solve complete.")
 
         except Exception as e:
             import traceback
