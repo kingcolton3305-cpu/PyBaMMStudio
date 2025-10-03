@@ -514,7 +514,7 @@ def _emit_pybamm_script(model_name: str, lines: list[str], overlay: dict, temp_C
         "def build_model():\n"
         "    return getattr(pybamm.lithium_ion, _MODEL_NAME)()\n\n"
         "def get_parameter_values():\n"
-        '    params = pb.ParameterValues(\"Chen2020\")\n"
+        '    params = pb.ParameterValues("Chen2020")\n"
         "    try:\n"
         "        params.update(_OVERLAY)\n"
         "    except Exception:\n"
