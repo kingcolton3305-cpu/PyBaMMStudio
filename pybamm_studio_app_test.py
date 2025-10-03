@@ -9,13 +9,13 @@
 from __future__ import annotations
 import io, json, sys, platform, hashlib, zipfile
 from datetime import datetime
-from typing import Any, Dict, Tuple, Iterable, Optional
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
-import requests 
+
 # --- Try importing PyBaMM -----------------------------------------------------
 try:
     import pybamm as pb
@@ -58,46 +58,7 @@ def solve(model, parameter_values, experiment=None):
 
 # --- Helpers ------------------------------------------------------------------
 def sha1(text: str) -> str:
-    return hashlib.sha1(text.encode()).hexdigest()
-
-def _mistral_key():
-    """Retrieve the Mistral API key from Streamlit secrets or environment variables."""
-    return st.secrets.get("MISTRAL_API_KEY") or os.getenv("MISTRAL_API_KEY") or ""
-
-def _mixtral(messages):
-    """Call the Mistral API with the provided messages."""
-    key = _mistral_key()
-    if not key:
-        return "Missing MISTRAL_API_KEY"
-
-    url = "https://api.mistral.ai/v1/chat/completions"
-    payload = {
-        "model": "open-mixtral-8x7b",
-        "messages": messages,
-        "temperature": 0.2
-    }
-
-    try:
-        r = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json"
-            },
-            json=payload
-        )
-        r.raise_for_status()  # Raises an HTTPError for bad responses
-        response = r.json()
-
-        # Check if the response contains the expected data
-        if "choices" in response and len(response["choices"]) > 0:
-            return response["choices"][0]["message"]["content"]
-        else:
-            return "Unexpected API response format"
-    except requests.exceptions.RequestException as e:
-        return f"API request failed: {e}"
-    except ValueError as e:
-        return f"JSON decode error: {e}"
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 def parse_jsonlike(s: str) -> Any:
     """Try json.loads; if it fails, return the raw string."""
@@ -172,6 +133,47 @@ def voltage_from_solution(sol) -> Tuple[np.ndarray, np.ndarray]:
     v = np.array(var.entries).reshape(-1)
     return t, v
 
+def plot_current_vs_time(sol, plot_area):
+    """
+    Plot current vs. time for a PyBaMM solution.
+
+    Args:
+        sol (pybamm.Solution): The solution object from a PyBaMM simulation.
+        plot_area (streamlit.plotly_chart or similar): The Streamlit plot area to render the figure.
+    """
+    t = sol.t
+    current = sol["Current [A]"].data
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(t, current, label="Current", color="blue")
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Current [A]")
+    ax.set_title("Current vs. Time")
+    ax.grid(True, alpha=0.3)
+
+    plot_area.pyplot(fig, clear_figure=True)
+
+def plot_voltage_vs_capacity(sol, plot_area):
+    """
+    Plot voltage vs. capacity for a PyBaMM solution.
+
+    Args:
+        sol (pybamm.Solution): The solution object from a PyBaMM simulation.
+        plot_area (streamlit.plotly_chart or similar): The Streamlit plot area to render the figure.
+    """
+    capacity = sol["Capacity [A.h]"].data
+    voltage = sol["Terminal voltage [V]"].data
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(capacity, voltage, label="Voltage", color="red")
+    ax.set_xlabel("Capacity [A.h]")
+    ax.set_ylabel("Voltage [V]")
+    ax.set_title("Voltage vs. Capacity")
+    ax.grid(True, alpha=0.3)
+
+    plot_area.pyplot(fig, clear_figure=True)
+
+
 def render_repro_text(script: str, params: Dict[str, Any], sim, sol) -> str:
     lines = []
     lines.append("# PyBaMM Studio Repro-Pack (text)")
@@ -196,36 +198,6 @@ def render_repro_text(script: str, params: Dict[str, Any], sim, sol) -> str:
             pass
     return "\n".join(lines)
 
-    def log(message: str) -> None:
-        if "hist" not in st.session_state:
-            st.session_state.hist = []
-        st.session_state.hist.append(message)
-
-    def get_var(sol: pb.Solution, candidates: Iterable[str]):
-        """Return .entries for the first candidate available in the solution."""
-        for key in candidates:
-            try:
-                return sol[key].entries, key
-            except Exception:
-                continue
-        return None, None
-
-    def run_experiment(exp_text: str, period: str):
-        # Build model and params
-        model = pb.lithium_ion.DFN() if ss["model_name"] == "DFN" else pb.lithium_ion.SPM()
-        params = pb.ParameterValues(ss["param_set"])
-
-        # Parse experiment
-        steps = [line.strip() for line in exp_text.splitlines() if line.strip()]
-        if not steps:
-            raise ValueError("Experiment is empty. Add at least one step.")
-        experiment = pb.Experiment(steps, period=period)
-
-        # Solve
-        sim = pb.Simulation(model, parameter_values=params, experiment=experiment)
-        sol = sim.solve()
-        return model, sol
-
 # --- Session state ------------------------------------------------------------
 if "code" not in st.session_state:
     st.session_state.code = STARTER_SCRIPT
@@ -237,40 +209,6 @@ if "simulation" not in st.session_state:
     st.session_state.simulation = None
 if "last_param_set" not in st.session_state:
     st.session_state.last_param_set = "Chen2020"
-
-# --- Visualization -----------------------------------------------------------
-def plot_current_vs_time(solution):
-    """Plot current vs. time from the simulation solution."""
-    fig, ax = plt.subplots()
-    time = solution.t
-    current = solution["Current [A]"]
-    ax.plot(time, current)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Current [A]")
-    ax.set_title("Current vs. Time")
-    st.pyplot(fig)
-
-def plot_voltage_vs_capacity(solution):
-    """Plot voltage vs. capacity from the simulation solution."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-    # Charge
-    charge_capacity = solution["Capacity [A.h]"].entries[0:len(solution.t)//2]
-    charge_voltage = solution["Terminal voltage [V]"].entries[0:len(solution.t)//2]
-    ax1.plot(charge_capacity, charge_voltage)
-    ax1.set_xlabel("Capacity [A.h]")
-    ax1.set_ylabel("Voltage [V]")
-    ax1.set_title("Voltage vs. Capacity (Charge)")
-
-    # Discharge
-    discharge_capacity = solution["Capacity [A.h]"].entries[len(solution.t)//2:]
-    discharge_voltage = solution["Terminal voltage [V]"].entries[len(solution.t)//2:]
-    ax2.plot(discharge_capacity, discharge_voltage)
-    ax2.set_xlabel("Capacity [A.h]")
-    ax2.set_ylabel("Voltage [V]")
-    ax2.set_title("Voltage vs. Capacity (Discharge)")
-
-    st.pyplot(fig)
 
 # --- Sidebar: Environment -----------------------------------------------------
 st.sidebar.title("Environment")
@@ -366,80 +304,45 @@ with tabs[2]:
     log = st.empty()
     plot_area = st.empty()
 
-    if run_btn:
+    if run_btn and _PYBAMM_OK:
         try:
-            log("Solving...")
-            model, sol = run_experiment(ss["experiment_text"], ss["period"])
+            overrides = df_to_dict(st.session_state.param_df)
+            sim, sol = run_user_script(st.session_state.code, overrides)
+            st.session_state.simulation = sim
+            st.session_state.solution = sol
 
-            # Time
-            t, t_key = get_var(sol, ["Time [s]", "Time [h]"])
-            if t is None:
-                raise KeyError("Time variable not found in solution.")
-            if t_key.endswith("[s]"):
-                t_h = t / 3600.0
-            else:
-                t_h = t
+            # Plot Voltage vs Time
+            t, v = voltage_from_solution(sol)
+            fig, ax = plt.subplots(figsize=(7, 4))
+            ax.plot(t, v)
+            ax.set_xlabel("Time [s]")
+            ax.set_ylabel("Voltage [V]")
+            ax.set_title("Voltage vs Time")
+            ax.grid(True, alpha=0.3)
+            plot_area.pyplot(fig, clear_figure=True)
 
-            # Voltage
-            V, v_key = get_var(sol, ["Voltage [V]", "Terminal voltage [V]"])
-            if V is None:
-                raise KeyError("Voltage variable not found in solution.")
+            # Plot Current vs Time
+            plot_current_vs_time(sol, plot_area)
 
-            # Current (optional)
-            I, _ = get_var(sol, ["Current [A]"])
-
-            # Capacity (optional)
-            Q, q_key = get_var(sol, ["Discharge capacity [A.h]", "Capacity [A.h]", "Discharge capacity [mAh]"])
-            if Q is not None and q_key.endswith("[mAh]"):
-                Q = Q / 1000.0  # mAh -> Ah
-
-            # Plot: Voltage vs Time
-            st.markdown("**Voltage vs Time**")
-            plt.figure(figsize=(6.5, 3.5))
-            plt.plot(t_h, V, linewidth=1.5)
-            plt.xlabel("Time [h]")
-            plt.ylabel("Voltage [V]")
-            plt.grid(True, alpha=0.3)
-            st.pyplot(plt.gcf())
-            plt.close()
-
-            # Plot: Current vs Time if available
-            if I is not None:
-                st.markdown("**Current vs Time**")
-                plt.figure(figsize=(6.5, 2.8))
-                plt.plot(t_h, I, linewidth=1.2)
-                plt.xlabel("Time [h]")
-                plt.ylabel("Current [A]")
-                plt.grid(True, alpha=0.3)
-                st.pyplot(plt.gcf())
-                plt.close()
-
-            # Plot: Voltage vs Capacity if available
-            if Q is not None and np.all(np.isfinite(Q)):
-                st.markdown("**Voltage vs Capacity**")
-                plt.figure(figsize=(5.5, 3.5))
-                plt.plot(Q, V, linewidth=1.5)
-                plt.xlabel("Capacity [A·h]")
-                plt.ylabel("Voltage [V]")
-                plt.grid(True, alpha=0.3)
-                st.pyplot(plt.gcf())
-                plt.close()
-
-            log("Solve complete.")
+            # Plot Voltage vs Capacity
+            plot_voltage_vs_capacity(sol, plot_area)
 
         except Exception as e:
-            import traceback
-            st.error(f"Run failed: {e}")
-            st.code("".join(traceback.format_exc()))
+            st.error(f"Error running simulation: {e}")
 
-    # Footer tips
-    with st.expander("Variable keys used"):
-        st.markdown(
-            "- Time: `'Time [s]'` or `'Time [h]'`\n"
-            "- Voltage: `'Voltage [V]'` or `'Terminal voltage [V]'`\n"
-            "- Current: `'Current [A]'`\n"
-            "- Capacity: `'Discharge capacity [A.h]'`, `'Capacity [A.h]'`, or `'Discharge capacity [mAh]'`"
-        )
+    elif st.session_state.solution is not None and _PYBAMM_OK:
+        # Show last plot if available
+        try:
+            t, v = voltage_from_solution(st.session_state.solution)
+            fig, ax = plt.subplots(figsize=(7, 4))
+            ax.plot(t, v)
+            ax.set_xlabel("Time [s]")
+            ax.set_ylabel("Voltage [V]")
+            ax.set_title("Voltage vs Time")
+            ax.grid(True, alpha=0.3)
+            plot_area.pyplot(fig, clear_figure=True)
+        except Exception as e:
+            st.warning(f"Plot unavailable: {e}")
 
 # --- Tab 4: Export ------------------------------------------------------------
 with tabs[3]:
@@ -549,6 +452,22 @@ _SYS = """You are Mixtral inside PyBaMM Studio. When asked to build, return ONLY
  ]}}
 If not building, reply with {"action":"chat","text":"..."} only.
 """
+
+def _mistral_key() -> str:
+    return st.secrets.get("MISTRAL_API_KEY") or os.getenv("MISTRAL_API_KEY") or ""
+
+def _mixtral(messages: List[Dict[str,str]]) -> str:
+    key = _mistral_key()
+    if not key:
+        return "Missing MISTRAL_API_KEY"
+    url = "https://api.mistral.ai/v1/chat/completions"
+    payload = {"model":"open-mixtral-8x7b","messages":messages,"temperature":0.2}
+    r = requests.post(url,
+                      headers={"Authorization": f"Bearer {key}", "Content-Type":"application/json"},
+                      data=json.dumps(payload),
+                      timeout=30)
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
 
 # ---------- Helpers ----------
 def _params_for(cell: CellSpec) -> Dict[str,Any]:
