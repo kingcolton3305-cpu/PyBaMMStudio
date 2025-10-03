@@ -196,7 +196,7 @@ def render_repro_text(script: str, params: Dict[str, Any], sim, sol) -> str:
             pass
     return "\n".join(lines)
 
-def log(msg: str) -> None:
+    def log(msg: str) -> None:
         ss["chat_history"].append({"role": "system", "content": msg})
 
     def get_var(sol: pb.Solution, candidates: Iterable[str]):
