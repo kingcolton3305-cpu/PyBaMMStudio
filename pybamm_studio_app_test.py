@@ -364,7 +364,7 @@ with tabs[2]:
     log = st.empty()
     plot_area = st.empty()
 
-        if run_btn:
+    if run_btn:
         try:
             log("Solving...")
             model, sol = run_experiment(ss["experiment_text"], ss["period"])
