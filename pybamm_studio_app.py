@@ -133,6 +133,47 @@ def voltage_from_solution(sol) -> Tuple[np.ndarray, np.ndarray]:
     v = np.array(var.entries).reshape(-1)
     return t, v
 
+def plot_current_vs_time(solution):
+    """
+    Plot the current vs. time for a PyBaMM solution.
+
+    Args:
+        solution (pybamm.Solution): The solution object from a PyBaMM simulation.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    time = solution.t
+    current = solution["Current [A]"].data
+
+    ax.plot(time, current, label="Current", color="blue")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Current (A)")
+    ax.set_title("Current vs. Time")
+    ax.grid(True)
+    ax.legend()
+
+    st.pyplot(fig)
+
+def plot_voltage_vs_capacity(solution):
+    """
+    Plot the voltage vs. capacity for a PyBaMM solution.
+
+    Args:
+        solution (pybamm.Solution): The solution object from a PyBaMM simulation.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    capacity = solution["Capacity [A.h]"].data
+    voltage = solution["Terminal voltage [V]"].data
+
+    ax.plot(capacity, voltage, label="Voltage", color="red")
+    ax.set_xlabel("Capacity (A.h)")
+    ax.set_ylabel("Voltage (V)")
+    ax.set_title("Voltage vs. Capacity")
+    ax.grid(True)
+    ax.legend()
+
+    st.pyplot(fig)
+
+
 def render_repro_text(script: str, params: Dict[str, Any], sim, sol) -> str:
     lines = []
     lines.append("# PyBaMM Studio Repro-Pack (text)")
@@ -279,6 +320,12 @@ with tabs[2]:
             ax.set_title("Voltage vs Time")
             ax.grid(True, alpha=0.3)
             plot_area.pyplot(fig, clear_figure=True)
+
+            st.subheader("Current vs. Time")
+            plot_current_vs_time(solution)
+
+            st.subheader("Voltage vs. Capacity")
+            plot_voltage_vs_capacity(solution)
 
             log.success(f"[ok] Solve complete. n_time={t.size}, V in [{float(v.min()):.3f}, {float(v.max()):.3f}] V")
         except Exception as e:
