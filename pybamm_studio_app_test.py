@@ -9,14 +9,13 @@
 from __future__ import annotations
 import io, json, sys, platform, hashlib, zipfile
 from datetime import datetime
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Iterable, Optional
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 import requests 
-
 # --- Try importing PyBaMM -----------------------------------------------------
 try:
     import pybamm as pb
@@ -197,6 +196,34 @@ def render_repro_text(script: str, params: Dict[str, Any], sim, sol) -> str:
             pass
     return "\n".join(lines)
 
+def log(msg: str) -> None:
+        ss["chat_history"].append({"role": "system", "content": msg})
+
+    def get_var(sol: pb.Solution, candidates: Iterable[str]):
+        """Return .entries for the first candidate available in the solution."""
+        for key in candidates:
+            try:
+                return sol[key].entries, key
+            except Exception:
+                continue
+        return None, None
+
+    def run_experiment(exp_text: str, period: str):
+        # Build model and params
+        model = pb.lithium_ion.DFN() if ss["model_name"] == "DFN" else pb.lithium_ion.SPM()
+        params = pb.ParameterValues(ss["param_set"])
+
+        # Parse experiment
+        steps = [line.strip() for line in exp_text.splitlines() if line.strip()]
+        if not steps:
+            raise ValueError("Experiment is empty. Add at least one step.")
+        experiment = pb.Experiment(steps, period=period)
+
+        # Solve
+        sim = pb.Simulation(model, parameter_values=params, experiment=experiment)
+        sol = sim.solve()
+        return model, sol
+
 # --- Session state ------------------------------------------------------------
 if "code" not in st.session_state:
     st.session_state.code = STARTER_SCRIPT
@@ -337,40 +364,80 @@ with tabs[2]:
     log = st.empty()
     plot_area = st.empty()
 
-    if run_btn and _PYBAMM_OK:
+        if run_btn:
         try:
-            overrides = df_to_dict(st.session_state.param_df)
-            sim, sol = run_user_script(st.session_state.code, overrides)
-            st.session_state.simulation = sim
-            st.session_state.solution = sol
+            log("Solving...")
+            model, sol = run_experiment(ss["experiment_text"], ss["period"])
 
-            # Plot Voltage vs Time
-            t, v = voltage_from_solution(sol)
-            fig, ax = plt.subplots(figsize=(7, 4))
-            ax.plot(t, v)
-            ax.set_xlabel("Time [s]")
-            ax.set_ylabel("Voltage [V]")
-            ax.set_title("Voltage vs Time")
-            ax.grid(True, alpha=0.3)
-            plot_area.pyplot(fig, clear_figure=True)
+            # Time
+            t, t_key = get_var(sol, ["Time [s]", "Time [h]"])
+            if t is None:
+                raise KeyError("Time variable not found in solution.")
+            if t_key.endswith("[s]"):
+                t_h = t / 3600.0
+            else:
+                t_h = t
 
-            log.success(f"[ok] Solve complete. n_time={t.size}, V in [{float(v.min()):.3f}, {float(v.max()):.3f}] V")
+            # Voltage
+            V, v_key = get_var(sol, ["Voltage [V]", "Terminal voltage [V]"])
+            if V is None:
+                raise KeyError("Voltage variable not found in solution.")
+
+            # Current (optional)
+            I, _ = get_var(sol, ["Current [A]"])
+
+            # Capacity (optional)
+            Q, q_key = get_var(sol, ["Discharge capacity [A.h]", "Capacity [A.h]", "Discharge capacity [mAh]"])
+            if Q is not None and q_key.endswith("[mAh]"):
+                Q = Q / 1000.0  # mAh -> Ah
+
+            # Plot: Voltage vs Time
+            st.markdown("**Voltage vs Time**")
+            plt.figure(figsize=(6.5, 3.5))
+            plt.plot(t_h, V, linewidth=1.5)
+            plt.xlabel("Time [h]")
+            plt.ylabel("Voltage [V]")
+            plt.grid(True, alpha=0.3)
+            st.pyplot(plt.gcf())
+            plt.close()
+
+            # Plot: Current vs Time if available
+            if I is not None:
+                st.markdown("**Current vs Time**")
+                plt.figure(figsize=(6.5, 2.8))
+                plt.plot(t_h, I, linewidth=1.2)
+                plt.xlabel("Time [h]")
+                plt.ylabel("Current [A]")
+                plt.grid(True, alpha=0.3)
+                st.pyplot(plt.gcf())
+                plt.close()
+
+            # Plot: Voltage vs Capacity if available
+            if Q is not None and np.all(np.isfinite(Q)):
+                st.markdown("**Voltage vs Capacity**")
+                plt.figure(figsize=(5.5, 3.5))
+                plt.plot(Q, V, linewidth=1.5)
+                plt.xlabel("Capacity [A·h]")
+                plt.ylabel("Voltage [V]")
+                plt.grid(True, alpha=0.3)
+                st.pyplot(plt.gcf())
+                plt.close()
+
+            log("Solve complete.")
+
         except Exception as e:
-            log.error(f"[error] {type(e).__name__}: {e}")
+            import traceback
+            st.error(f"Run failed: {e}")
+            st.code("".join(traceback.format_exc()))
 
-    elif st.session_state.solution is not None and _PYBAMM_OK:
-        # Show last plot if available
-        try:
-            t, v = voltage_from_solution(st.session_state.solution)
-            fig, ax = plt.subplots(figsize=(7, 4))
-            ax.plot(t, v)
-            ax.set_xlabel("Time [s]")
-            ax.set_ylabel("Voltage [V]")
-            ax.set_title("Voltage vs Time")
-            ax.grid(True, alpha=0.3)
-            plot_area.pyplot(fig, clear_figure=True)
-        except Exception as e:
-            st.warning(f"Plot unavailable: {e}")
+    # Footer tips
+    with st.expander("Variable keys used"):
+        st.markdown(
+            "- Time: `'Time [s]'` or `'Time [h]'`\n"
+            "- Voltage: `'Voltage [V]'` or `'Terminal voltage [V]'`\n"
+            "- Current: `'Current [A]'`\n"
+            "- Capacity: `'Discharge capacity [A.h]'`, `'Capacity [A.h]'`, or `'Discharge capacity [mAh]'`"
+        )
 
 # --- Tab 4: Export ------------------------------------------------------------
 with tabs[3]:
